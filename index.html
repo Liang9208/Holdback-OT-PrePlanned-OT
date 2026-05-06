@@ -912,7 +912,10 @@ function classifyCS(cs){
   if(/^T[23]\s*[\(\[]/.test(s)||/^T[23]\s+FUNG/i.test(s))return'rs';
   if(/^AA\d/i.test(s)||/^A[1-9]\s*[\(\[]/i.test(s))return'rs';
   if(/^EARLY RUN/i.test(s)||/^STANDBY/i.test(s)||/^ONGOING/i.test(s)||/^COLECT/i.test(s)||/^COLLECT/i.test(s))return'rs';
-  if(/\b(?:0[678]00|[78][ap]m|pm\s*[78])\s*(?:cc|con)\b/i.test(s) || /\b(?:cc|con)\s*(?:0[678]00|[78][ap]m)\b/i.test(s)) return 'gs';
+  
+  // Tag as green if it contains any CC variation requested
+  if(/(?:0[678]00|[78]\s*[ap]m|pm\s*[78]).*?(?:cc|con)|(?:cc|con).*?(?:0[678]00|[78]\s*[ap]m|pm\s*[78])/i.test(s)) return 'gs';
+  
   if(/JASLYN|YAO\s*\dGS|EE\s*\dGS|IRFAN\s*\dGS|YEO SL/i.test(s)&&!/\(\d\)\s*[12]X/i.test(s))return'gs';
   if(/\b[28]GS\b/i.test(s)||/\bGS\/F\b/i.test(s)||/\bGS\b/.test(s))return'gs';
   return'pb';
@@ -1120,16 +1123,20 @@ function buildOT(){
   var bestPerCS={};
   var ccBest={A:null,B:null,C:null};
   var bC_flights=[];
+  
   flightRows.forEach(function(row){
     var n=etdNum(row.etd);
     row.callsigns.forEach(function(cs){
       var type=cs.type||classifyCS(cs.text);
       var key=normalizeCS(cs.text);
       if(type==='pb'){if(!bestPerCS[key]||n>bestPerCS[key].etdNum)bestPerCS[key]={fl:row.flight,gate:row.gate,etd:row.etd,etdNum:n};}
+      
       var csl=String(cs.text||'').toLowerCase();
       
-      var isTeamA = /\b(?:0[67]00|7[ap]m|pm\s*7)\s*(?:con|cc)\b/i.test(csl) || /\b(?:cc|con)\s*(?:0[67]00|7[ap]m)\b/i.test(csl);
-      var isTeamBC = /\b(?:0800|8[ap]m|pm\s*8)\s*(?:con|cc)\b/i.test(csl) || /\b(?:cc|con)\s*(?:0800|8[ap]m)\b/i.test(csl);
+      // Robust matcher for Team A (0700, 0600, 7am, 7pm, pm7) + (cc or con)
+      var isTeamA = /(?:0[67]00|7\s*[ap]m|pm\s*7).*?(?:cc|con)|(?:cc|con).*?(?:0[67]00|7\s*[ap]m|pm\s*7)/i.test(csl);
+      // Robust matcher for Team BC (0800, 8am, 8pm, pm8) + (cc or con)
+      var isTeamBC = /(?:0800|8\s*[ap]m|pm\s*8).*?(?:cc|con)|(?:cc|con).*?(?:0800|8\s*[ap]m|pm\s*8)/i.test(csl);
 
       if(isTeamA){
         if(!ccBest.A||n>etdNum(ccBest.A.etd))ccBest.A={fl:row.flight,gate:row.gate,etd:row.etd};
@@ -1141,8 +1148,13 @@ function buildOT(){
   });
 
   if(bC_flights.length > 0) {
+      // Sort so earliest flight is first
       bC_flights.sort(function(a, b){ return a.etdNum - b.etdNum; });
+      
+      // Team B gets the earliest flight
       ccBest.B = {fl:bC_flights[0].fl, gate:bC_flights[0].gate, etd:bC_flights[0].etd};
+      
+      // Team C gets the latest flight (if there is only 1 flight, they get the same one)
       var last = bC_flights[bC_flights.length - 1];
       ccBest.C = {fl:last.fl, gate:last.gate, etd:last.etd};
   }
