@@ -801,9 +801,6 @@ function parseGrouping(ws){
   var currentCallsignL='',currentCallsignR='';
   var currentTeam='';
   function setGroupedOfficer(id,obj){
-    // Do not overwrite a good callsign with a later duplicate row that has no callsign.
-    // This prevents cases like Bawahni appearing again lower in the grouping sheet and losing
-    // the original team callsign T2 PM BAWAHNI(2) 1X.
     var old=officerMap[id];
     if(old&&old.callsign&&!obj.callsign){
       officerMap[id]={
@@ -841,7 +838,6 @@ function parseGrouping(ws){
       continue;
     }
 
-    // Detect new TEAM header — wipe inherited callsigns to prevent bleed-over
     var rowHasTeam=false;
     for(var ci=0;ci<row.length;ci++){
       var tm=String(row[ci]||'').trim().match(/^TEAM\s*([A-Z0-9]+)/i);
@@ -864,7 +860,6 @@ function parseGrouping(ws){
 
     if(/^\d{4,}$/.test(idC)&&!/SERVICE\s*ID/i.test(idC)){
       var nm=stripSuffix(String(row[3]||''));
-      // FIX: Accept if it looks like a real name (not a pure callsign like "T2 PM X (3) 2X")
       var isCallsignC=/T2\s*PM|TEAM CALL SIGN|SERVICE ID/i.test(nm)||/\(\d+\)\s*\d+X\*?$/i.test(nm);
       if(nm&&!isCallsignC){
         setGroupedOfficer(idC,{name:nm,callsign:currentCallsignL,team:currentTeam,rem:remC});
@@ -917,10 +912,9 @@ function classifyCS(cs){
   if(/^T[23]\s*[\(\[]/.test(s)||/^T[23]\s+FUNG/i.test(s))return'rs';
   if(/^AA\d/i.test(s)||/^A[1-9]\s*[\(\[]/i.test(s))return'rs';
   if(/^EARLY RUN/i.test(s)||/^STANDBY/i.test(s)||/^ONGOING/i.test(s)||/^COLECT/i.test(s)||/^COLLECT/i.test(s))return'rs';
-  if(/^CC\s*(7AM|8AM|0[67]00)/i.test(s)||/\bCC\s*[78]AM\b/i.test(s))return'gs';
-  if(/\bPM\s*[78]\s*CON\b/i.test(s))return'gs';
-  if(/\b[28]GS\b/i.test(s)||/\bGS\/F\b/i.test(s)||/\bGS\b/.test(s))return'gs';
+  if(/\b(?:0[678]00|[78][ap]m|pm\s*[78])\s*(?:cc|con)\b/i.test(s) || /\b(?:cc|con)\s*(?:0[678]00|[78][ap]m)\b/i.test(s)) return 'gs';
   if(/JASLYN|YAO\s*\dGS|EE\s*\dGS|IRFAN\s*\dGS|YEO SL/i.test(s)&&!/\(\d\)\s*[12]X/i.test(s))return'gs';
+  if(/\b[28]GS\b/i.test(s)||/\bGS\/F\b/i.test(s)||/\bGS\b/.test(s))return'gs';
   return'pb';
 }
 
@@ -963,7 +957,6 @@ function findBestByGroupingCallsign(callsign,bestPerCS){
   var keys=Object.keys(bestPerCS);
   var fk=keys.find(function(k){
     var kWords=k.split(' ').filter(function(w){return w.length>2;});
-    // Prefer exact meaningful token overlap, so "T2 PM BAWAHNI" matches the full grouping team.
     return kWords.some(function(kw){return csWords.indexOf(kw)>=0;}) ||
            csWords.some(function(cw){return kWords.indexOf(cw)>=0;});
   });
@@ -1124,9 +1117,9 @@ function buildOT(){
   var kahMap=masterData.kah||{};
   var manualData=parseManualText(document.getElementById('manualText').value);
 
-  // Build bestPerCS from ALL blue (pb) tags in flight rows
   var bestPerCS={};
   var ccBest={A:null,B:null,C:null};
+  var bC_flights=[];
   flightRows.forEach(function(row){
     var n=etdNum(row.etd);
     row.callsigns.forEach(function(cs){
@@ -1134,26 +1127,29 @@ function buildOT(){
       var key=normalizeCS(cs.text);
       if(type==='pb'){if(!bestPerCS[key]||n>bestPerCS[key].etdNum)bestPerCS[key]={fl:row.flight,gate:row.gate,etd:row.etd,etdNum:n};}
       var csl=String(cs.text||'').toLowerCase();
-      // CC flight assignment keywords:
-      // PM7 CON / CC 7AM / CC 0600 / CC 0700 => CC Team A
-      // PM8 CON / CC 8AM / CC 0800 => CC Team B & C
-      // This is checked for every tag, not only green tags, so manually-added "PM8 CON" also works.
-      if(csl.match(/\bpm\s*7\s*con\b/)||csl.match(/cc\s*7am/)||csl.match(/cc\s*0[67]00/)){
+      
+      var isTeamA = /\b(?:0[67]00|7[ap]m|pm\s*7)\s*(?:con|cc)\b/i.test(csl) || /\b(?:cc|con)\s*(?:0[67]00|7[ap]m)\b/i.test(csl);
+      var isTeamBC = /\b(?:0800|8[ap]m|pm\s*8)\s*(?:con|cc)\b/i.test(csl) || /\b(?:cc|con)\s*(?:0800|8[ap]m)\b/i.test(csl);
+
+      if(isTeamA){
         if(!ccBest.A||n>etdNum(ccBest.A.etd))ccBest.A={fl:row.flight,gate:row.gate,etd:row.etd};
       }
-      if(csl.match(/\bpm\s*8\s*con\b/)||csl.match(/cc\s*8am/)||csl.match(/cc\s*0800/)){
-        if(!ccBest.B||n>etdNum(ccBest.B.etd))ccBest.B={fl:row.flight,gate:row.gate,etd:row.etd};
-        if(!ccBest.C||n>etdNum(ccBest.C.etd))ccBest.C={fl:row.flight,gate:row.gate,etd:row.etd};
+      if(isTeamBC){
+        bC_flights.push({fl:row.flight,gate:row.gate,etd:row.etd,etdNum:n});
       }
     });
   });
 
+  if(bC_flights.length > 0) {
+      bC_flights.sort(function(a, b){ return a.etdNum - b.etdNum; });
+      ccBest.B = {fl:bC_flights[0].fl, gate:bC_flights[0].gate, etd:bC_flights[0].etd};
+      var last = bC_flights[bC_flights.length - 1];
+      ccBest.C = {fl:last.fl, gate:last.gate, etd:last.etd};
+  }
+
   var ccMap={};
   (gData.concourse||[]).forEach(function(c){ccMap[c.id]={ccTeam:c.ccTeam,rem:c.rem||''};});
 
-  // Better logic: deployment callsign -> grouping team -> service IDs.
-  // If a deployment tag matches a grouping callsign, every officer ID under that same
-  // grouping callsign gets the same flight. This prevents first/second officer mismatch.
   var groupFlightById={};
   Object.keys(gData.officerMap||{}).forEach(function(gid){
     var go=gData.officerMap[gid];
@@ -1182,9 +1178,7 @@ function buildOT(){
 
     if(claimOT){
       if(isKAH){
-        // KAH officers get SUPERVISOR DUTY, no flight lookup
       } else {
-        // 1. Manual holdback text — name substring match
         var matched=null;
         for(var m=0;m<manualData.length;m++){
           var np=manualData[m].namePart;
@@ -1286,8 +1280,6 @@ function buildHoldbackExportRows(){
   return rows;
 }
 function buildHoldbackPreviewRows(){
-  // Preview only: remove S/N column from Holdback OT table preview.
-  // Export XLSX still keeps the original S/N column.
   var exportRows=buildHoldbackExportRows();
   return exportRows.map(function(row){
     return Array.isArray(row)?row.slice(1):row;
